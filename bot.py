@@ -182,8 +182,9 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await update.message.reply_text(f"Talep edilen {miktar} adet data çekiliyor ve Excel dosyası oluşturuluyor...")
 
-    # Geçici dosya adı oluşturma (aynı anda birden fazla istek çakışmasın diye kullanıcı ID ve zamanı kullanıyoruz)
-    TEMP_EXCEL_ADI = f"gonderilecek_veri_paketi_{update.effective_user.id}_{int(os.times()[0])}.xlsx" 
+    # YENİ VE KRİTİK DEĞİŞİKLİK: Dosyayı /tmp/ dizinine kaydetmek için yolu değiştiriyoruz.
+    TEMP_DOSYA_ADI = f"gonderilecek_veri_paketi_{update.effective_user.id}_{int(os.times()[0])}.xlsx" 
+    TEMP_EXCEL_YOLU = os.path.join("/tmp", TEMP_DOSYA_ADI) # /tmp/klasorundeki tam yol
 
     try:
         # Önce mevcut kullanılan satırları oku (Kalıcılık için)
@@ -233,16 +234,16 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("Üzgünüm, Excel dosyasında gönderilebilecek işaretlenmemiş veri kalmadı.")
             return
 
-        # 4. Geçici Dosyayı Kaydetme
-        workbook_yeni.save(TEMP_EXCEL_ADI)
+        # 4. Geçici Dosyayı Kaydetme (YENİ YOLU KULLANIYORUZ)
+        workbook_yeni.save(TEMP_EXCEL_YOLU)
 
-        # 5. Dosyayı Gruba Gönder
-        with open(TEMP_EXCEL_ADI, 'rb') as f:
+        # 5. Dosyayı Gruba Gönder (YENİ YOLU KULLANIYORUZ)
+        with open(TEMP_EXCEL_YOLU, 'rb') as f:
             await context.bot.send_document(
                 chat_id=HEDEF_GRUP_ID,
                 document=f,
                 caption=f"✅ **{veri_sayisi_toplam}** adet yeni data paketi gönderildi ve çöp kutusuna taşındı.\n"
-                        f"Dosya Adı: `{TEMP_EXCEL_ADI}`"
+                        f"Dosya Adı: `{TEMP_DOSYA_ADI}`"
             )
 
         # 6. Kullanılan Satırları KAYDET (Kalıcılık için)
@@ -263,11 +264,11 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
     finally:
-        # Hata olsa da olmasa da, geçici dosyayı SİL
-        if os.path.exists(TEMP_EXCEL_ADI):
+        # Hata olsa da olmasa da, geçici dosyayı SİL (YENİ YOLU KULLANIYORUZ)
+        if os.path.exists(TEMP_EXCEL_YOLU):
             try:
-                os.remove(TEMP_EXCEL_ADI)
-                logger.info(f"Geçici dosya silindi: {TEMP_EXCEL_ADI}")
+                os.remove(TEMP_EXCEL_YOLU)
+                logger.info(f"Geçici dosya silindi: {TEMP_EXCEL_YOLU}")
             except Exception as e:
                  logger.error(f"Geçici dosya silinirken hata: {e}")
 
