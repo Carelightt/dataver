@@ -242,8 +242,7 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
             await context.bot.send_document(
                 chat_id=HEDEF_GRUP_ID,
                 document=f,
-                caption=f"✅ **{veri_sayisi_toplam}** adet yeni data paketi gönderildi ve çöp kutusuna taşındı.\n"
-                        f"Dosya Adı: `{TEMP_DOSYA_ADI}`"
+                caption=f"✅ **{veri_sayisi_toplam}** adet yeni data gönderildi ve sistemden silindi.\n"
             )
 
         # 6. Kullanılan Satırları KAYDET (Kalıcılık için)
@@ -308,3 +307,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
