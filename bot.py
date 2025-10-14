@@ -7,6 +7,7 @@ import json # Satır numaralarını kalıcı olarak kaydetmek için
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, JobQueue 
 from openpyxl import load_workbook
+from openpyxl import Workbook # YENİ: Excel dosyası oluşturmak için
 
 # --- Sabitler (Sana Özel Bilgiler) ---
 # Lütfen bu bilgilerin doğru olduğundan emin ol.
@@ -114,7 +115,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if yetkili_mi(update):
         await update.message.reply_text(
             f'Merhaba yetkili! Ben göreve hazırım. Mevcut komutlar:\n\n'
-            f'  • /ver <miktar>: Veri gönderir ve işaretler.\n'
+            f'  • /ver <miktar>: Veriyi **Excel dosyası** olarak gönderir ve işaretler.\n'
             f'  • /kalan: Verilmemiş veri sayısını söyler.\n'
             f'  • /rapor: Verilmiş veri sayısını söyler.'
         )
@@ -153,14 +154,14 @@ async def rapor_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    /ver <miktar> komutunu işler. Veriyi gönderir ve satır numarasını kalıcı dosyaya kaydeder.
-    Veri sayısının çok olması durumunda mesajı otomatik olarak böler ve her veriyi numaralandırır.
+    /ver <miktar> komutunu işler. Veriyi geçici bir Excel dosyasına yazar, dosyayı gönderir 
+    ve satır numarasını kalıcı dosyaya kaydeder.
     """
     # 1. Yetki Kontrolü
     if not yetkili_mi(update):
         return
 
-    # 2. Miktar Kontrolü ve Ayrıştırma
+    # 2. Miktar Kontrolü ve Ayrıştırma 
     if not context.args or not context.args[0].isdigit():
         await update.message.reply_text("Kullanım: `/ver <miktar>`. Lütfen kaç adet veri istediğinizi sayı olarak belirtin.")
         return
@@ -174,94 +175,75 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("Miktar sayı olmalıdır.")
         return
 
-    # 3. Excel Dosya Kontrolü
+    # 3. Excel Dosya Kontrolü 
     if not os.path.exists(EXCEL_DOSYA_ADI):
         await update.message.reply_text(f"Hata: '{EXCEL_DOSYA_ADI}' dosyası bulunamadı. Lütfen kontrol edin.")
         return
 
-    await update.message.reply_text(f"Talep edilen {miktar} adet data çekiliyor ve gruba gönderiliyor...")
+    await update.message.reply_text(f"Talep edilen {miktar} adet data çekiliyor ve Excel dosyası oluşturuluyor...")
+
+    # Geçici dosya adı oluşturma (aynı anda birden fazla istek çakışmasın diye kullanıcı ID ve zamanı kullanıyoruz)
+    TEMP_EXCEL_ADI = f"gonderilecek_veri_paketi_{update.effective_user.id}_{int(os.times()[0])}.xlsx" 
 
     try:
         # Önce mevcut kullanılan satırları oku (Kalıcılık için)
         mevcut_kullanilanlar = kullanilan_satirlari_oku()
         
-        workbook = load_workbook(EXCEL_DOSYA_ADI)
-        sheet = workbook.active  
+        # Orijinal verileri okuma
+        workbook_kaynak = load_workbook(EXCEL_DOSYA_ADI)
+        sheet_kaynak = workbook_kaynak.active  
         
-        tum_veriler = [] # Tüm çekilen verileri tutar
+        # GÖNDERİLECEK YENİ EXCEL DOSYASINI OLUŞTUR
+        workbook_yeni = Workbook()
+        sheet_yeni = workbook_yeni.active
+        
         yeni_kullanilacak_satir_numaralari = [] # Bu oturumda kullanılanlar
-        veri_sayisi_toplam = 0 # Toplam çekilecek veri sayısını kontrol eder
-        veri_sayac = 0 # Mesaj içindeki verileri 1'den başlatarak numaralandırır
+        veri_sayisi_toplam = 0 
         baslangic_satiri = 2 
-        
-        # Okuma ve Toplama Döngüsü
-        for row_index, row in enumerate(sheet.iter_rows(min_row=baslangic_satiri), start=baslangic_satiri):
+
+        # Yeni Excel'in Başlık Satırı
+        # Sıra numarası için ekstra bir başlık ekliyoruz
+        basliklar = ["SIRA NO"] + VERI_ETIKETLERI
+        sheet_yeni.append(basliklar)
+
+        # Okuma ve Yeni Excel'e Yazma Döngüsü
+        for row_index, row in enumerate(sheet_kaynak.iter_rows(min_row=baslangic_satiri), start=baslangic_satiri):
             
-            # TXT KONTROLÜ
+            # KULLANILANLAR KONTROLÜ
             if row_index in mevcut_kullanilanlar:
                  continue
 
             if veri_sayisi_toplam >= miktar:
                 break
                 
-            # Veri formatlama kısmı
-            satir_verisi_duzenli = []
-            hucre_degerleri = [str(cell.value).strip() if cell.value is not None else "" for cell in row]
+            # Hücre değerlerini al
+            # Not: openpyxl ile okunan değerler zaten doğru veri tiplerindedir (str, int vb.)
+            hucre_degerleri = [cell.value for cell in row]
             
-            for etiket_index, etiket in enumerate(VERI_ETIKETLERI):
-                if etiket_index < len(hucre_degerleri):
-                    deger = hucre_degerleri[etiket_index]
-                    satir_verisi_duzenli.append(f"**{etiket}**: {deger}")
+            # Yeni satır: Sıra numarası + Orijinal değerler
+            yeni_satir = [veri_sayisi_toplam + 1] + hucre_degerleri
             
-            # Veri setinin başına numarayı ekle (YENİ)
-            veri_sayac += 1
-            numarali_veri = f"**{veri_sayac}. DATA**\n" + "\n".join(satir_verisi_duzenli)
-            
-            tum_veriler.append(numarali_veri) 
+            # Yeni Excel dosyasına yaz
+            sheet_yeni.append(yeni_satir)
             
             yeni_kullanilacak_satir_numaralari.append(row_index)
             veri_sayisi_toplam += 1
 
-        if not tum_veriler:
+        if veri_sayisi_toplam == 0:
             await update.message.reply_text("Üzgünüm, Excel dosyasında gönderilebilecek işaretlenmemiş veri kalmadı.")
             return
 
-        # 5. Verileri Gruba Bölerek Gönderme (4096 Karakter Limitini Aşmamak İçin)
-        
-        MAX_CHAR_LIMIT = 3800 
-        VERI_AYIRICI = "\n\n---\n\n"
-        
-        gonderilecek_gruplar = []
-        mevcut_grup = []
-        mevcut_grup_uzunlugu = 0
-        
-        for veri in tum_veriler:
-            veri_uzunlugu = len(veri) + len(VERI_AYIRICI) 
-            
-            if mevcut_grup_uzunlugu + veri_uzunlugu >= MAX_CHAR_LIMIT:
-                gonderilecek_gruplar.append(mevcut_grup)
-                mevcut_grup = []
-                mevcut_grup_uzunlugu = 0
-                
-            mevcut_grup.append(veri)
-            mevcut_grup_uzunlugu += veri_uzunlugu
-            
-        if mevcut_grup:
-            gonderilecek_gruplar.append(mevcut_grup)
+        # 4. Geçici Dosyayı Kaydetme
+        workbook_yeni.save(TEMP_EXCEL_ADI)
 
-        # Tüm grupları ayrı mesajlar olarak gönder
-        toplam_gonderilen_veri = 0
-        for grup in gonderilecek_gruplar:
-            grup_mesaji = VERI_AYIRICI.join(grup)
-            
-            mesaj_basligi = f"📄 **Data Paketi** ({gonderilecek_gruplar.index(grup) + 1}/{len(gonderilecek_gruplar)})\n\n"
-            
-            await context.bot.send_message(
+        # 5. Dosyayı Gruba Gönder
+        with open(TEMP_EXCEL_ADI, 'rb') as f:
+            await context.bot.send_document(
                 chat_id=HEDEF_GRUP_ID,
-                text=mesaj_basligi + grup_mesaji,
-                parse_mode='Markdown'
+                document=f,
+                caption=f"✅ **{veri_sayisi_toplam}** adet yeni data paketi gönderildi ve çöp kutusuna taşındı.\n"
+                        f"Dosya Adı: `{TEMP_EXCEL_ADI}`"
             )
-            toplam_gonderilen_veri += len(grup)
 
         # 6. Kullanılan Satırları KAYDET (Kalıcılık için)
         
@@ -269,12 +251,21 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
         kullanilan_satirlari_kaydet(mevcut_kullanilanlar)
 
         await update.message.reply_text(
-            f"✅ İşlem Başarılı! Toplam **{toplam_gonderilen_veri}** adet data {len(gonderilecek_gruplar)} ayrı mesaj halinde gruba gönderildi ve çöp kutusuna taşındı."
+            f"İşlem Tamamlandı! **{veri_sayisi_toplam}** adet data Excel dosyası olarak gruba gönderildi."
         )
 
     except Exception as e:
         logger.error(f"Kritik hata oluştu: {e}")
         await update.message.reply_text(f"❌ Kritik Bir Hata Oluştu. Detaylar loglara kaydedildi. Hata: `{e}`")
+
+    finally:
+        # Hata olsa da olmasa da, geçici dosyayı SİL
+        if os.path.exists(TEMP_EXCEL_ADI):
+            try:
+                os.remove(TEMP_EXCEL_ADI)
+                logger.info(f"Geçici dosya silindi: {TEMP_EXCEL_ADI}")
+            except Exception as e:
+                 logger.error(f"Geçici dosya silinirken hata: {e}")
 
 
 # --- Ana Fonksiyon ---
