@@ -256,7 +256,11 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     except Exception as e:
         logger.error(f"Kritik hata oluştu: {e}")
-        await update.message.reply_text(f"❌ Kritik Bir Hata Oluştu. Detaylar loglara kaydedildi. Hata: `{e}`")
+        # Hata tipini ve detayını ekranda göstererek sorunun kaynağını bulmayı kolaylaştırıyoruz
+        await update.message.reply_text(
+            f"❌ İşlem sırasında KRİTİK BİR HATA oluştu. Loglara kaydedildi.\n"
+            f"Hata detayı: `{type(e).__name__}: {e}`"
+        )
 
     finally:
         # Hata olsa da olmasa da, geçici dosyayı SİL
