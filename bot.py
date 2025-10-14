@@ -2,12 +2,11 @@ import logging
 import pytz
 import os 
 import re 
-import json # YENİ: Satır numaralarını kaydetmek için eklendi
+import json # Satır numaralarını kalıcı olarak kaydetmek için
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, JobQueue 
 from openpyxl import load_workbook
-# from openpyxl.styles import PatternFill # Kaldırıldı, artık boyama yapmayacağız
 
 # --- Sabitler (Sana Özel Bilgiler) ---
 # Lütfen bu bilgilerin doğru olduğundan emin ol.
@@ -15,8 +14,7 @@ TOKEN = "8484668521:AAGiVlPq_SAc5UKBXpC6F7weGFOShJDJ0yA"
 YETKILI_USER_ID = 6672759317  # Senin Telegram Kullanıcı ID'n
 HEDEF_GRUP_ID = -1003195011322 # Verilerin gönderileceği Telegram Grup ID'si
 EXCEL_DOSYA_ADI = "veriler.xlsx"
-# EXCEL_BOYAMA_RENGI = "00ADD8E6" # Boyama sabiti kaldırıldı
-KULLANILANLAR_DOSYA_ADI = "kullanilanlar.txt" # YENİ: Kullanılan satırları tutacak dosya
+KULLANILANLAR_DOSYA_ADI = "kullanilanlar.txt" # Kullanılan satırları tutacak dosya
 
 # Veri Etiketlerinin Sıralaması (Excel sütun sırasına göre)
 VERI_ETIKETLERI = [
@@ -36,7 +34,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# --- YARDIMCI KALICILIK FONKSİYONLARI (YENİ) ---
+# --- YARDIMCI KALICILIK FONKSİYONLARI ---
 
 def kullanilan_satirlari_oku() -> set:
     """Kullanılan satır numaralarını dosyadan okur."""
@@ -47,7 +45,6 @@ def kullanilan_satirlari_oku() -> set:
             # Satır numaraları metin dosyasında JSON listesi olarak tutuluyor
             return set(json.load(f))
     except Exception as e:
-        # Dosya boş veya bozuksa, boş bir küme döndür.
         logger.warning(f"Kullanılan satırlar dosyası okunamadı, sıfırdan başlıyor: {e}")
         return set()
 
@@ -57,12 +54,11 @@ def kullanilan_satirlari_kaydet(satirlar: set):
         with open(KULLANILANLAR_DOSYA_ADI, 'w') as f:
             # Set nesnesini JSON'a kaydetmek için listeye çeviriyoruz
             json.dump(list(satirlar), f)
-        # logger.info(f"Kullanılan {len(satirlar)} satır numarası dosyaya kaydedildi.")
     except Exception as e:
         logger.error(f"Kullanılan satırlar kaydedilirken KRİTİK HATA: {e}")
 
 
-# --- Yardımcı Fonksiyon: Yetki Kontrolü ve Yetkisiz Mesajı (Aynı) ---
+# --- Yardımcı Fonksiyon: Yetki Kontrolü ve Yetkisiz Mesajı ---
 
 def yetkili_mi(update: Update) -> bool:
     """
@@ -73,13 +69,12 @@ def yetkili_mi(update: Update) -> bool:
         logger.warning(
             f"Yetkisiz erişim denemesi: User ID {update.effective_user.id} - Chat ID {update.effective_chat.id}"
         )
-        # İstenen yetkisiz mesajı gönderiliyor
         update.message.reply_text("Yetkiniz yoktur.")
         return False
     return True
 
 
-# --- YARDIMCI EXCEL FONKSİYONU GÜNCELLENDİ ---
+# --- YARDIMCI EXCEL/DURUM FONKSİYONU ---
 
 def excel_durumu_hesapla():
     """Excel dosyasındaki kullanılan (kaydedilmiş) ve kalan (kaydedilmemiş) satırları hesaplar."""
@@ -90,7 +85,7 @@ def excel_durumu_hesapla():
         workbook = load_workbook(EXCEL_DOSYA_ADI)
         sheet = workbook.active
         
-        # YENİ: Kullanılan satır numaralarını hafızadan oku
+        # Kullanılan satır numaralarını hafızadan oku
         kullanilan_satir_numaralari = kullanilan_satirlari_oku()
         
         kullanilan_sayisi = 0
@@ -99,7 +94,7 @@ def excel_durumu_hesapla():
         
         # Tüm veri satırlarını döngüye al
         for row_index, row in enumerate(sheet.iter_rows(min_row=baslangic_satiri), start=baslangic_satiri):
-            # YENİ KONTROL: Satır, kullanılanlar listesinde mi kontrol et
+            # Satır, kullanılanlar listesinde mi kontrol et
             if row_index in kullanilan_satir_numaralari:
                 kullanilan_sayisi += 1
             else:
@@ -124,7 +119,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f'  • /rapor: Verilmiş veri sayısını söyler.'
         )
 
-# /kalan komutu güncellenen excel_durumu_hesapla'yı kullanacak.
 async def kalan_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Kalan veri sayısını bildirir."""
     if not yetkili_mi(update):
@@ -141,9 +135,8 @@ async def kalan_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TY
         f"Elimizdeki data sayısı: **{kalan}**"
     )
 
-# /rapor komutu güncellenen excel_durumu_hesapla'yı kullanacak.
 async def rapor_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Verilmiş (boyanmış) veri sayısını bildirir."""
+    """Verilmiş (kullanılmış) veri sayısını bildirir."""
     if not yetkili_mi(update):
         return
 
@@ -158,16 +151,16 @@ async def rapor_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TY
         f"Verilen data sayısı: **{kullanilan}**"
     )
 
-# /ver komutu güncellendi
 async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     /ver <miktar> komutunu işler. Veriyi gönderir ve satır numarasını kalıcı dosyaya kaydeder.
+    Veri sayısının çok olması durumunda mesajı otomatik olarak böler ve her veriyi numaralandırır.
     """
     # 1. Yetki Kontrolü
     if not yetkili_mi(update):
         return
 
-    # 2. Miktar Kontrolü ve Ayrıştırma (Aynı)
+    # 2. Miktar Kontrolü ve Ayrıştırma
     if not context.args or not context.args[0].isdigit():
         await update.message.reply_text("Kullanım: `/ver <miktar>`. Lütfen kaç adet veri istediğinizi sayı olarak belirtin.")
         return
@@ -181,12 +174,12 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("Miktar sayı olmalıdır.")
         return
 
-    # 3. Excel Dosya Kontrolü (Aynı)
+    # 3. Excel Dosya Kontrolü
     if not os.path.exists(EXCEL_DOSYA_ADI):
         await update.message.reply_text(f"Hata: '{EXCEL_DOSYA_ADI}' dosyası bulunamadı. Lütfen kontrol edin.")
         return
 
-    await update.message.reply_text(f"{miktar} adet data çekiliyor ve gruba gönderiliyor...")
+    await update.message.reply_text(f"Talep edilen {miktar} adet data çekiliyor ve gruba gönderiliyor...")
 
     try:
         # Önce mevcut kullanılan satırları oku (Kalıcılık için)
@@ -195,22 +188,23 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
         workbook = load_workbook(EXCEL_DOSYA_ADI)
         sheet = workbook.active  
         
-        veriler = []
+        tum_veriler = [] # Tüm çekilen verileri tutar
         yeni_kullanilacak_satir_numaralari = [] # Bu oturumda kullanılanlar
-        veri_sayisi = 0
+        veri_sayisi_toplam = 0 # Toplam çekilecek veri sayısını kontrol eder
+        veri_sayac = 0 # Mesaj içindeki verileri 1'den başlatarak numaralandırır
         baslangic_satiri = 2 
         
         # Okuma ve Toplama Döngüsü
         for row_index, row in enumerate(sheet.iter_rows(min_row=baslangic_satiri), start=baslangic_satiri):
             
-            # **MAVİ KONTROLÜ YERİNE TXT KONTROLÜ**
+            # TXT KONTROLÜ
             if row_index in mevcut_kullanilanlar:
                  continue
 
-            if veri_sayisi >= miktar:
+            if veri_sayisi_toplam >= miktar:
                 break
                 
-            # Veri formatlama kısmı (Aynı)
+            # Veri formatlama kısmı
             satir_verisi_duzenli = []
             hucre_degerleri = [str(cell.value).strip() if cell.value is not None else "" for cell in row]
             
@@ -219,45 +213,71 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
                     deger = hucre_degerleri[etiket_index]
                     satir_verisi_duzenli.append(f"**{etiket}**: {deger}")
             
-            veriler.append("\n".join(satir_verisi_duzenli)) 
+            # Veri setinin başına numarayı ekle (YENİ)
+            veri_sayac += 1
+            numarali_veri = f"**{veri_sayac}. DATA**\n" + "\n".join(satir_verisi_duzenli)
+            
+            tum_veriler.append(numarali_veri) 
             
             yeni_kullanilacak_satir_numaralari.append(row_index)
-            veri_sayisi += 1
+            veri_sayisi_toplam += 1
 
-        if not veriler:
+        if not tum_veriler:
             await update.message.reply_text("Üzgünüm, Excel dosyasında gönderilebilecek işaretlenmemiş veri kalmadı.")
             return
 
-        # 5. Verileri Gruba Gönder (Aynı)
-        gonderilecek_mesaj = f"**{veri_sayisi}** adet yeni data:\n\n" + "\n\n---\n\n".join(veriler)
+        # 5. Verileri Gruba Bölerek Gönderme (4096 Karakter Limitini Aşmamak İçin)
         
-        await context.bot.send_message(
-            chat_id=HEDEF_GRUP_ID,
-            text=gonderilecek_mesaj,
-            parse_mode='Markdown'
-        )
+        MAX_CHAR_LIMIT = 3800 
+        VERI_AYIRICI = "\n\n---\n\n"
         
-        # 6. Kullanılan Satırları KAYDET (Boyama Kaldırıldı)
+        gonderilecek_gruplar = []
+        mevcut_grup = []
+        mevcut_grup_uzunlugu = 0
         
-        # Yeni kullanılanları mevcut listeye ekle
+        for veri in tum_veriler:
+            veri_uzunlugu = len(veri) + len(VERI_AYIRICI) 
+            
+            if mevcut_grup_uzunlugu + veri_uzunlugu >= MAX_CHAR_LIMIT:
+                gonderilecek_gruplar.append(mevcut_grup)
+                mevcut_grup = []
+                mevcut_grup_uzunlugu = 0
+                
+            mevcut_grup.append(veri)
+            mevcut_grup_uzunlugu += veri_uzunlugu
+            
+        if mevcut_grup:
+            gonderilecek_gruplar.append(mevcut_grup)
+
+        # Tüm grupları ayrı mesajlar olarak gönder
+        toplam_gonderilen_veri = 0
+        for grup in gonderilecek_gruplar:
+            grup_mesaji = VERI_AYIRICI.join(grup)
+            
+            mesaj_basligi = f"📄 **Data Paketi** ({gonderilecek_gruplar.index(grup) + 1}/{len(gonderilecek_gruplar)})\n\n"
+            
+            await context.bot.send_message(
+                chat_id=HEDEF_GRUP_ID,
+                text=mesaj_basligi + grup_mesaji,
+                parse_mode='Markdown'
+            )
+            toplam_gonderilen_veri += len(grup)
+
+        # 6. Kullanılan Satırları KAYDET (Kalıcılık için)
+        
         mevcut_kullanilanlar.update(yeni_kullanilacak_satir_numaralari)
-        
-        # Kalıcı dosyaya kaydet
         kullanilan_satirlari_kaydet(mevcut_kullanilanlar)
 
-        # Excel'i kaydetme ve boyama kodları kaldırıldı.
-        # workbook.save(EXCEL_DOSYA_ADI)
-
         await update.message.reply_text(
-            f"{veri_sayisi} adet data gruba gönderildi ve çöp kutusuna taşındı."
+            f"✅ İşlem Başarılı! Toplam **{toplam_gonderilen_veri}** adet data {len(gonderilecek_gruplar)} ayrı mesaj halinde gruba gönderildi ve çöp kutusuna taşındı."
         )
 
     except Exception as e:
         logger.error(f"Kritik hata oluştu: {e}")
-        await update.message.reply_text(f"❌ Bir Hata Oluştu. Detaylar loglara kaydedildi. Hata: `{e}`")
+        await update.message.reply_text(f"❌ Kritik Bir Hata Oluştu. Detaylar loglara kaydedildi. Hata: `{e}`")
 
 
-# --- Ana Fonksiyon (Aynı) ---
+# --- Ana Fonksiyon ---
 
 def main() -> None:
     """Botu başlatır."""
@@ -271,6 +291,7 @@ def main() -> None:
             .build()
         )
         
+        # Türkiye saat dilimini ayarla
         application.job_queue.scheduler.configure(timezone=pytz.timezone('Europe/Istanbul'))
 
     except Exception as e:
