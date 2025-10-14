@@ -251,7 +251,7 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
         kullanilan_satirlari_kaydet(mevcut_kullanilanlar)
 
         await update.message.reply_text(
-            f"İşlem Tamamlandı! **{veri_sayisi_toplam}** adet data Excel dosyası olarak gruba gönderildi."
+            f"{veri_sayisi_toplam} adet data Excel dosyası olarak gönderildi."
         )
 
     except Exception as e:
@@ -307,4 +307,5 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
 
