@@ -2,11 +2,12 @@ import logging
 import pytz
 import os 
 import re 
+import json # YENİ: Satır numaralarını kaydetmek için eklendi
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, JobQueue 
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill 
+# from openpyxl.styles import PatternFill # Kaldırıldı, artık boyama yapmayacağız
 
 # --- Sabitler (Sana Özel Bilgiler) ---
 # Lütfen bu bilgilerin doğru olduğundan emin ol.
@@ -14,7 +15,8 @@ TOKEN = "8484668521:AAGiVlPq_SAc5UKBXpC6F7weGFOShJDJ0yA"
 YETKILI_USER_ID = 6672759317  # Senin Telegram Kullanıcı ID'n
 HEDEF_GRUP_ID = -1003195011322 # Verilerin gönderileceği Telegram Grup ID'si
 EXCEL_DOSYA_ADI = "veriler.xlsx"
-EXCEL_BOYAMA_RENGI = "00ADD8E6" # Açık Mavi (ARGB formatında)
+# EXCEL_BOYAMA_RENGI = "00ADD8E6" # Boyama sabiti kaldırıldı
+KULLANILANLAR_DOSYA_ADI = "kullanilanlar.txt" # YENİ: Kullanılan satırları tutacak dosya
 
 # Veri Etiketlerinin Sıralaması (Excel sütun sırasına göre)
 VERI_ETIKETLERI = [
@@ -34,7 +36,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# --- Yardımcı Fonksiyon: Yetki Kontrolü ve Yetkisiz Mesajı ---
+# --- YARDIMCI KALICILIK FONKSİYONLARI (YENİ) ---
+
+def kullanilan_satirlari_oku() -> set:
+    """Kullanılan satır numaralarını dosyadan okur."""
+    if not os.path.exists(KULLANILANLAR_DOSYA_ADI):
+        return set()
+    try:
+        with open(KULLANILANLAR_DOSYA_ADI, 'r') as f:
+            # Satır numaraları metin dosyasında JSON listesi olarak tutuluyor
+            return set(json.load(f))
+    except Exception as e:
+        # Dosya boş veya bozuksa, boş bir küme döndür.
+        logger.warning(f"Kullanılan satırlar dosyası okunamadı, sıfırdan başlıyor: {e}")
+        return set()
+
+def kullanilan_satirlari_kaydet(satirlar: set):
+    """Kullanılan satır numaralarını dosyaya kaydeder."""
+    try:
+        with open(KULLANILANLAR_DOSYA_ADI, 'w') as f:
+            # Set nesnesini JSON'a kaydetmek için listeye çeviriyoruz
+            json.dump(list(satirlar), f)
+        # logger.info(f"Kullanılan {len(satirlar)} satır numarası dosyaya kaydedildi.")
+    except Exception as e:
+        logger.error(f"Kullanılan satırlar kaydedilirken KRİTİK HATA: {e}")
+
+
+# --- Yardımcı Fonksiyon: Yetki Kontrolü ve Yetkisiz Mesajı (Aynı) ---
 
 def yetkili_mi(update: Update) -> bool:
     """
@@ -51,10 +79,10 @@ def yetkili_mi(update: Update) -> bool:
     return True
 
 
-# --- YARDIMCI EXCEL FONKSİYONU ---
+# --- YARDIMCI EXCEL FONKSİYONU GÜNCELLENDİ ---
 
 def excel_durumu_hesapla():
-    """Excel dosyasındaki kullanılan (boyalı) ve kalan (boyasız) satırları hesaplar."""
+    """Excel dosyasındaki kullanılan (kaydedilmiş) ve kalan (kaydedilmemiş) satırları hesaplar."""
     if not os.path.exists(EXCEL_DOSYA_ADI):
         return None, "Hata: Excel dosyası bulunamadı."
     
@@ -62,14 +90,17 @@ def excel_durumu_hesapla():
         workbook = load_workbook(EXCEL_DOSYA_ADI)
         sheet = workbook.active
         
+        # YENİ: Kullanılan satır numaralarını hafızadan oku
+        kullanilan_satir_numaralari = kullanilan_satirlari_oku()
+        
         kullanilan_sayisi = 0
         kalan_sayisi = 0
         baslangic_satiri = 2
         
         # Tüm veri satırlarını döngüye al
-        for row in sheet.iter_rows(min_row=baslangic_satiri):
-            # Eğer ilk hücrenin rengi boyama rengiyle eşleşiyorsa, kullanılmıştır.
-            if row[0].fill.start_color.rgb == EXCEL_BOYAMA_RENGI:
+        for row_index, row in enumerate(sheet.iter_rows(min_row=baslangic_satiri), start=baslangic_satiri):
+            # YENİ KONTROL: Satır, kullanılanlar listesinde mi kontrol et
+            if row_index in kullanilan_satir_numaralari:
                 kullanilan_sayisi += 1
             else:
                 kalan_sayisi += 1
@@ -85,7 +116,6 @@ def excel_durumu_hesapla():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/start komutuna yanıt verir."""
-    # start komutuna gelen yetkisiz mesaj, yetkili_mi fonksiyonu içinde zaten gönderiliyor.
     if yetkili_mi(update):
         await update.message.reply_text(
             f'Merhaba yetkili! Ben göreve hazırım. Mevcut komutlar:\n\n'
@@ -94,7 +124,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f'  • /rapor: Verilmiş veri sayısını söyler.'
         )
 
-# YENİ KOMUT: /kalan
+# /kalan komutu güncellenen excel_durumu_hesapla'yı kullanacak.
 async def kalan_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Kalan veri sayısını bildirir."""
     if not yetkili_mi(update):
@@ -111,7 +141,7 @@ async def kalan_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TY
         f"Elimizdeki data sayısı: **{kalan}**"
     )
 
-# YENİ KOMUT: /rapor
+# /rapor komutu güncellenen excel_durumu_hesapla'yı kullanacak.
 async def rapor_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Verilmiş (boyanmış) veri sayısını bildirir."""
     if not yetkili_mi(update):
@@ -128,10 +158,10 @@ async def rapor_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TY
         f"Verilen data sayısı: **{kullanilan}**"
     )
 
-# Güncellenmiş /ver komutu (Excel'i açma mantığı aynı kaldı)
+# /ver komutu güncellendi
 async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    /ver <miktar> komutunu işler. Yetkili tarafından gruba veri gönderir ve Excel'de işaretler.
+    /ver <miktar> komutunu işler. Veriyi gönderir ve satır numarasını kalıcı dosyaya kaydeder.
     """
     # 1. Yetki Kontrolü
     if not yetkili_mi(update):
@@ -159,27 +189,28 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(f"{miktar} adet data çekiliyor ve gruba gönderiliyor...")
 
     try:
-        # 4. Excel İşlemleri (Aynı)
+        # Önce mevcut kullanılan satırları oku (Kalıcılık için)
+        mevcut_kullanilanlar = kullanilan_satirlari_oku()
+        
         workbook = load_workbook(EXCEL_DOSYA_ADI)
         sheet = workbook.active  
         
         veriler = []
-        satir_numaralari = []
+        yeni_kullanilacak_satir_numaralari = [] # Bu oturumda kullanılanlar
         veri_sayisi = 0
         baslangic_satiri = 2 
         
-        mavi_dolgu = PatternFill(start_color=EXCEL_BOYAMA_RENGI, end_color=EXCEL_BOYAMA_RENGI, fill_type="solid")
-
-        # Okuma ve Toplama Döngüsü (Aynı)
+        # Okuma ve Toplama Döngüsü
         for row_index, row in enumerate(sheet.iter_rows(min_row=baslangic_satiri), start=baslangic_satiri):
             
-            if row[0].fill.start_color.rgb == EXCEL_BOYAMA_RENGI:
+            # **MAVİ KONTROLÜ YERİNE TXT KONTROLÜ**
+            if row_index in mevcut_kullanilanlar:
                  continue
 
             if veri_sayisi >= miktar:
                 break
                 
-            # YENİ FORMATLAMA (Aynı)
+            # Veri formatlama kısmı (Aynı)
             satir_verisi_duzenli = []
             hucre_degerleri = [str(cell.value).strip() if cell.value is not None else "" for cell in row]
             
@@ -190,7 +221,7 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
             
             veriler.append("\n".join(satir_verisi_duzenli)) 
             
-            satir_numaralari.append(row_index)
+            yeni_kullanilacak_satir_numaralari.append(row_index)
             veri_sayisi += 1
 
         if not veriler:
@@ -206,24 +237,27 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode='Markdown'
         )
         
-        # 6. Excel'de Kullanılan Satırları İşaretle (Aynı)
-        for satir_no in satir_numaralari:
-            for col_index in range(1, sheet.max_column + 1):
-                sheet.cell(row=satir_no, column=col_index).fill = mavi_dolgu
+        # 6. Kullanılan Satırları KAYDET (Boyama Kaldırıldı)
+        
+        # Yeni kullanılanları mevcut listeye ekle
+        mevcut_kullanilanlar.update(yeni_kullanilacak_satir_numaralari)
+        
+        # Kalıcı dosyaya kaydet
+        kullanilan_satirlari_kaydet(mevcut_kullanilanlar)
 
-        # Değişiklikleri kaydet
-        workbook.save(EXCEL_DOSYA_ADI)
+        # Excel'i kaydetme ve boyama kodları kaldırıldı.
+        # workbook.save(EXCEL_DOSYA_ADI)
 
         await update.message.reply_text(
             f"{veri_sayisi} adet data gruba gönderildi ve çöp kutusuna taşındı."
         )
 
     except Exception as e:
-        logger.error(f"Excel veya Telegram işlemi sırasında kritik hata: {e}")
+        logger.error(f"Kritik hata oluştu: {e}")
         await update.message.reply_text(f"❌ Bir Hata Oluştu. Detaylar loglara kaydedildi. Hata: `{e}`")
 
 
-# --- Ana Fonksiyon ---
+# --- Ana Fonksiyon (Aynı) ---
 
 def main() -> None:
     """Botu başlatır."""
@@ -247,8 +281,8 @@ def main() -> None:
     # Komut işleyicilerini ekle
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("ver", ver_komutu_isleyici)) 
-    application.add_handler(CommandHandler("kalan", kalan_komutu_isleyici)) # Yeni komut
-    application.add_handler(CommandHandler("rapor", rapor_komutu_isleyici)) # Yeni komut
+    application.add_handler(CommandHandler("kalan", kalan_komutu_isleyici))
+    application.add_handler(CommandHandler("rapor", rapor_komutu_isleyici))
 
     # Bot çalışmaya başlar (sürekli güncellemeleri dinler)
     logger.info("Bot başarıyla başlatıldı ve dinlemede...")
