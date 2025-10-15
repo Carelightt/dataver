@@ -2,20 +2,40 @@ import logging
 import pytz
 import os 
 import re 
-import json # Satır numaralarını kalıcı olarak kaydetmek için
+import json 
+import redis # Redis kütüphanesini ekle
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, JobQueue 
 from openpyxl import load_workbook
-from openpyxl import Workbook # YENİ: Excel dosyası oluşturmak için
+from openpyxl import Workbook 
 
-# --- Sabitler (Sana Özel Bilgiler) ---
-# Lütfen bu bilgilerin doğru olduğundan emin ol.
-TOKEN = "8484668521:AAGiVlPq_SAc5UKBXpC6F7weGFOShJDJ0yA"
-YETKILI_USER_ID = 6672759317  # Senin Telegram Kullanıcı ID'n
-HEDEF_GRUP_ID = -1003195011322 # Verilerin gönderileceği Telegram Grup ID'si
+# --- Sabitler (RENDER ORTAM DEĞİŞKENLERİNDEN ÇEKİLECEK) ---
+# DİKKAT: Botunuzun gizli bilgilerini doğrudan koda yazmak yerine 
+# Render'daki Environment Variables (Ortam Değişkenleri) üzerinden okuyacak şekilde ayarlıyoruz.
+# Eğer bunları Env Var olarak ayarlamadıysanız, botunuz çalışmayacaktır!
+TOKEN = os.environ.get("TOKEN", "8484668521:AAGiVlPq_SAc5UKBXpC6F7weGFOShJDJ0yA") # Varsayılan değer, eğer Env Var yoksa
+YETKILI_USER_ID = int(os.environ.get("YETKILI_USER_ID", 6672759317))  # Env Var'dan oku
+HEDEF_GRUP_ID = int(os.environ.get("HEDEF_GRUP_ID", -1003195011322)) # Env Var'dan oku
+
 EXCEL_DOSYA_ADI = "veriler.xlsx"
-KULLANILANLAR_DOSYA_ADI = "kullanilanlar.txt" # Kullanılan satırları tutacak dosya
+
+# --- REDIS SABİTLERİ VE BAĞLANTI ---
+# REDIS_URL'i Render Key Value servisi tarafından sağlanan Env Var'dan okur.
+# Varsayılan değer olarak localhost kullanır.
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0") 
+REDIS_KEY = "kullanilan_satirlar" # Redis'te kullanılacak key adı
+
+# Redis bağlantı nesnesi
+r = None
+try:
+    # Decode_responses=True string olarak okumamızı sağlar
+    r = redis.from_url(REDIS_URL, decode_responses=True)
+    r.ping()
+    logger.info("Redis bağlantısı başarılı.")
+except Exception as e:
+    logger.error(f"Redis bağlantı hatası! Lütfen Render Key Value servisini kurduğunuzdan ve REDIS_URL Env Var'ını doğru ayarladığınızdan emin olun. Hata: {e}")
+    r = None
 
 # Veri Etiketlerinin Sıralaması (Excel sütun sırasına göre)
 VERI_ETIKETLERI = [
@@ -35,28 +55,36 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# --- YARDIMCI KALICILIK FONKSİYONLARI ---
+# --- YARDIMCI KALICILIK FONKSİYONLARI (REDIS KULLANAN) ---
 
 def kullanilan_satirlari_oku() -> set:
-    """Kullanılan satır numaralarını dosyadan okur."""
-    if not os.path.exists(KULLANILANLAR_DOSYA_ADI):
+    """Kullanılan satır numaralarını Redis'ten okur."""
+    if r is None:
+        logger.error("Redis bağlantısı mevcut değil. Kalıcılık çalışmayacak.")
         return set()
     try:
-        with open(KULLANILANLAR_DOSYA_ADI, 'r') as f:
-            # Satır numaraları metin dosyasında JSON listesi olarak tutuluyor
-            return set(json.load(f))
+        # Redis SISMEMBERS ile set içindeki tüm elemanları oku
+        # Geri dönen set içindeki string'leri integer'a çeviriyoruz
+        satirlar = {int(s) for s in r.smembers(REDIS_KEY)}
+        return satirlar
     except Exception as e:
-        logger.warning(f"Kullanılan satırlar dosyası okunamadı, sıfırdan başlıyor: {e}")
+        logger.error(f"Redis'ten okuma hatası: {e}")
         return set()
 
 def kullanilan_satirlari_kaydet(satirlar: set):
-    """Kullanılan satır numaralarını dosyaya kaydeder."""
+    """Kullanılan satır numaralarını Redis'e kaydeder."""
+    if r is None:
+        return
     try:
-        with open(KULLANILANLAR_DOSYA_ADI, 'w') as f:
-            # Set nesnesini JSON'a kaydetmek için listeye çeviriyoruz
-            json.dump(list(satirlar), f)
+        # Önce mevcut Redis set'ini tamamen sil (güncel listeyi yazmak için)
+        r.delete(REDIS_KEY) 
+        if satirlar:
+            # SADD ile tüm set elemanlarını Redis'e ekle
+            # Set içindeki int'leri string'e çeviriyoruz
+            r.sadd(REDIS_KEY, *[str(s) for s in satirlar])
+            logger.info(f"Redis'e {len(satirlar)} adet kullanılan satır kaydedildi.")
     except Exception as e:
-        logger.error(f"Kullanılan satırlar kaydedilirken KRİTİK HATA: {e}")
+        logger.error(f"Redis'e kaydetme hatası: KRİTİK HATA: {e}")
 
 
 # --- Yardımcı Fonksiyon: Yetki Kontrolü ve Yetkisiz Mesajı ---
@@ -66,6 +94,7 @@ def yetkili_mi(update: Update) -> bool:
     Komutu kullanan kişinin yetkili ID'ye sahip olup olmadığını kontrol eder.
     Yetkisi yoksa istenen hata mesajını gönderir.
     """
+    # Yetkili ID'yi integer'a çevirerek kontrol et
     if update.effective_user.id != YETKILI_USER_ID:
         logger.warning(
             f"Yetkisiz erişim denemesi: User ID {update.effective_user.id} - Chat ID {update.effective_chat.id}"
@@ -86,7 +115,7 @@ def excel_durumu_hesapla():
         workbook = load_workbook(EXCEL_DOSYA_ADI)
         sheet = workbook.active
         
-        # Kullanılan satır numaralarını hafızadan oku
+        # Kullanılan satır numaralarını Redis'ten oku
         kullanilan_satir_numaralari = kullanilan_satirlari_oku()
         
         kullanilan_sayisi = 0
@@ -114,7 +143,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/start komutuna yanıt verir."""
     if yetkili_mi(update):
         await update.message.reply_text(
-            f'Merhaba yetkili! Ben göreve hazırım. Mevcut komutlar:\n\n'
+            f'Mevcut komutlar:\n\n'
             f'  • /ver <miktar>: Veriyi **Excel dosyası** olarak gönderir ve işaretler.\n'
             f'  • /kalan: Verilmemiş veri sayısını söyler.\n'
             f'  • /rapor: Verilmiş veri sayısını söyler.'
@@ -155,7 +184,7 @@ async def rapor_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TY
 async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     /ver <miktar> komutunu işler. Veriyi geçici bir Excel dosyasına yazar, dosyayı gönderir 
-    ve satır numarasını kalıcı dosyaya kaydeder.
+    ve satır numarasını kalıcı olarak kaydeder (Redis kullanarak).
     """
     # 1. Yetki Kontrolü
     if not yetkili_mi(update):
@@ -163,7 +192,7 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # 2. Miktar Kontrolü ve Ayrıştırma 
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("Kullanım: `/ver <miktar>`. Lütfen kaç adet veri istediğinizi sayı olarak belirtin.")
+        await update.message.reply_text("Kullanım: `/ver <miktar>`. Lütfen kaç adet data istediğinizi sayı olarak belirtin.")
         return
     
     try:
@@ -180,14 +209,19 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"Hata: '{EXCEL_DOSYA_ADI}' dosyası bulunamadı. Lütfen kontrol edin.")
         return
 
+    # REDIS BAĞLANTISI KONTROLÜ
+    if r is None:
+        await update.message.reply_text("❌ Redis bağlantısı kurulamadı. Veriler işaretlenemeyecek.")
+
+
     await update.message.reply_text(f"Talep edilen {miktar} adet data çekiliyor ve Excel dosyası oluşturuluyor...")
 
-    # YENİ VE KRİTİK DEĞİŞİKLİK: Dosyayı /tmp/ dizinine kaydetmek için yolu değiştiriyoruz.
+    # Dosyayı /tmp/ dizinine kaydetmek için yolu
     TEMP_DOSYA_ADI = f"gonderilecek_veri_paketi_{update.effective_user.id}_{int(os.times()[0])}.xlsx" 
     TEMP_EXCEL_YOLU = os.path.join("/tmp", TEMP_DOSYA_ADI) # /tmp/klasorundeki tam yol
 
     try:
-        # Önce mevcut kullanılan satırları oku (Kalıcılık için)
+        # Önce mevcut kullanılan satırları Redis'ten oku
         mevcut_kullanilanlar = kullanilan_satirlari_oku()
         
         # Orijinal verileri okuma
@@ -198,12 +232,11 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
         workbook_yeni = Workbook()
         sheet_yeni = workbook_yeni.active
         
-        yeni_kullanilacak_satir_numaralari = [] # Bu oturumda kullanılanlar
+        yeni_kullanilacak_satir_numaralari = set() # Bu oturumda kullanılanlar set olarak tutulur
         veri_sayisi_toplam = 0 
         baslangic_satiri = 2 
 
         # Yeni Excel'in Başlık Satırı
-        # Sıra numarası için ekstra bir başlık ekliyoruz
         basliklar = ["SIRA NO"] + VERI_ETIKETLERI
         sheet_yeni.append(basliklar)
 
@@ -218,7 +251,6 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
                 break
                 
             # Hücre değerlerini al
-            # Not: openpyxl ile okunan değerler zaten doğru veri tiplerindedir (str, int vb.)
             hucre_degerleri = [cell.value for cell in row]
             
             # Yeni satır: Sıra numarası + Orijinal değerler
@@ -227,44 +259,44 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
             # Yeni Excel dosyasına yaz
             sheet_yeni.append(yeni_satir)
             
-            yeni_kullanilacak_satir_numaralari.append(row_index)
+            yeni_kullanilacak_satir_numaralari.add(row_index)
             veri_sayisi_toplam += 1
 
         if veri_sayisi_toplam == 0:
-            await update.message.reply_text("Üzgünüm, Excel dosyasında gönderilebilecek işaretlenmemiş veri kalmadı.")
+            await update.message.reply_text("Üzgünüm, Excel dosyasında gönderilebilecek data kalmadı.")
             return
 
-        # 4. Geçici Dosyayı Kaydetme (YENİ YOLU KULLANIYORUZ)
+        # 4. Geçici Dosyayı Kaydetme
         workbook_yeni.save(TEMP_EXCEL_YOLU)
 
-        # 5. Dosyayı Gruba Gönder (YENİ YOLU KULLANIYORUZ)
+        # 5. Dosyayı Gruba Gönder
         with open(TEMP_EXCEL_YOLU, 'rb') as f:
             await context.bot.send_document(
                 chat_id=HEDEF_GRUP_ID,
                 document=f,
-                caption=f"✅ **{veri_sayisi_toplam}** adet yeni data paketi gönderildi ve çöp kutusuna taşındı.\n"
+                caption=f"✅ {veri_sayisi_toplam} adet data gönderildi.\n"
                         f"Dosya Adı: `{TEMP_DOSYA_ADI}`"
             )
 
-        # 6. Kullanılan Satırları KAYDET (Kalıcılık için)
+        # 6. Kullanılan Satırları KAYDET (REDIS ile kalıcılık sağlanır)
+        if r is not None:
+            mevcut_kullanilanlar.update(yeni_kullanilacak_satir_numaralari)
+            kullanilan_satirlari_kaydet(mevcut_kullanilanlar)
+            final_mesaj = f"{veri_sayisi_toplam} adet data Excel dosyası olarak gönderildi ve sistemimizden silindi."
+        else:
+            final_mesaj = f"{veri_sayisi_toplam} adet data Excel dosyası olarak gönderildi. ⚠️ Ancak Redis bağlantı hatası nedeniyle işaretlenemedi."
         
-        mevcut_kullanilanlar.update(yeni_kullanilacak_satir_numaralari)
-        kullanilan_satirlari_kaydet(mevcut_kullanilanlar)
-
-        await update.message.reply_text(
-            f"İşlem Tamamlandı! **{veri_sayisi_toplam}** adet data Excel dosyası olarak gruba gönderildi."
-        )
+        await update.message.reply_text(final_mesaj)
 
     except Exception as e:
         logger.error(f"Kritik hata oluştu: {e}")
-        # Hata tipini ve detayını ekranda göstererek sorunun kaynağını bulmayı kolaylaştırıyoruz
         await update.message.reply_text(
             f"❌ İşlem sırasında KRİTİK BİR HATA oluştu. Loglara kaydedildi.\n"
             f"Hata detayı: `{type(e).__name__}: {e}`"
         )
 
     finally:
-        # Hata olsa da olmasa da, geçici dosyayı SİL (YENİ YOLU KULLANIYORUZ)
+        # Geçici dosyayı SİL
         if os.path.exists(TEMP_EXCEL_YOLU):
             try:
                 os.remove(TEMP_EXCEL_YOLU)
