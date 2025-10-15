@@ -13,29 +13,11 @@ from openpyxl import Workbook
 # --- Sabitler (RENDER ORTAM DEĞİŞKENLERİNDEN ÇEKİLECEK) ---
 # DİKKAT: Botunuzun gizli bilgilerini doğrudan koda yazmak yerine 
 # Render'daki Environment Variables (Ortam Değişkenleri) üzerinden okuyacak şekilde ayarlıyoruz.
-# Eğer bunları Env Var olarak ayarlamadıysanız, botunuz çalışmayacaktır!
-TOKEN = os.environ.get("TOKEN", "8484668521:AAGiVlPq_SAc5UKBXpC6F7weGFOShJDJ0yA") # Varsayılan değer, eğer Env Var yoksa
-YETKILI_USER_ID = int(os.environ.get("YETKILI_USER_ID", 6672759317))  # Env Var'dan oku
-HEDEF_GRUP_ID = int(os.environ.get("HEDEF_GRUP_ID", -1003195011322)) # Env Var'dan oku
-
+# Eğer bunları Env Var olarak ayarlamadıysanız, botunuz varsayılan değerleri kullanır!
+TOKEN = os.environ.get("TOKEN", "8484668521:AAGiVlPq_SAc5UKBXpC6F7weGFOShJDJ0yA") 
+YETKILI_USER_ID = int(os.environ.get("YETKILI_USER_ID", 6672759317))
+HEDEF_GRUP_ID = int(os.environ.get("HEDEF_GRUP_ID", -1003195011322))
 EXCEL_DOSYA_ADI = "veriler.xlsx"
-
-# --- REDIS SABİTLERİ VE BAĞLANTI ---
-# REDIS_URL'i Render Key Value servisi tarafından sağlanan Env Var'dan okur.
-# Varsayılan değer olarak localhost kullanır.
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0") 
-REDIS_KEY = "kullanilan_satirlar" # Redis'te kullanılacak key adı
-
-# Redis bağlantı nesnesi
-r = None
-try:
-    # Decode_responses=True string olarak okumamızı sağlar
-    r = redis.from_url(REDIS_URL, decode_responses=True)
-    r.ping()
-    logger.info("Redis bağlantısı başarılı.")
-except Exception as e:
-    logger.error(f"Redis bağlantı hatası! Lütfen Render Key Value servisini kurduğunuzdan ve REDIS_URL Env Var'ını doğru ayarladığınızdan emin olun. Hata: {e}")
-    r = None
 
 # Veri Etiketlerinin Sıralaması (Excel sütun sırasına göre)
 VERI_ETIKETLERI = [
@@ -47,12 +29,31 @@ VERI_ETIKETLERI = [
     "IBAN"
 ]
 
+# --- LOGGING TANIMLAMA (ÖNCE YAPILMALI!) ---
 # Günlükleme (logging) ayarları
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+
+# --- REDIS SABİTLERİ VE BAĞLANTI ---
+# REDIS_URL'i Render Key Value servisi tarafından sağlanan Env Var'dan okur.
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0") 
+REDIS_KEY = "kullanilan_satirlar" # Redis'te kullanılacak key adı
+
+# Redis bağlantı nesnesi
+r = None
+try:
+    # Decode_responses=True string olarak okumamızı sağlar
+    r = redis.from_url(REDIS_URL, decode_responses=True)
+    r.ping()
+    logger.info("Redis bağlantısı başarılı.")
+except Exception as e:
+    # Hata oluştuğunda logger artık tanımlı olduğu için sorunsuz çalışacaktır.
+    logger.error(f"Redis bağlantı hatası! Lütfen Render Key Value servisini kurduğunuzdan ve REDIS_URL Env Var'ını doğru ayarladığınızdan emin olun. Hata: {e}")
+    r = None
 
 
 # --- YARDIMCI KALICILIK FONKSİYONLARI (REDIS KULLANAN) ---
@@ -143,7 +144,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/start komutuna yanıt verir."""
     if yetkili_mi(update):
         await update.message.reply_text(
-            f'Mevcut komutlar:\n\n'
+            f'Merhaba yetkili! Ben göreve hazırım. Mevcut komutlar:\n\n'
             f'  • /ver <miktar>: Veriyi **Excel dosyası** olarak gönderir ve işaretler.\n'
             f'  • /kalan: Verilmemiş veri sayısını söyler.\n'
             f'  • /rapor: Verilmiş veri sayısını söyler.'
@@ -192,7 +193,7 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # 2. Miktar Kontrolü ve Ayrıştırma 
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("Kullanım: `/ver <miktar>`. Lütfen kaç adet data istediğinizi sayı olarak belirtin.")
+        await update.message.reply_text("Kullanım: `/ver <miktar>`. Lütfen kaç adet veri istediğinizi sayı olarak belirtin.")
         return
     
     try:
@@ -211,7 +212,8 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # REDIS BAĞLANTISI KONTROLÜ
     if r is None:
-        await update.message.reply_text("❌ Redis bağlantısı kurulamadı. Veriler işaretlenemeyecek.")
+        # Bu mesaj, loglardaki hatayı gördükten sonra kullanıcının da bilgilendirilmesi için iyidir.
+        await update.message.reply_text("❌ Kalıcılık hizmeti (Redis) bağlantısı kurulamadı. Veriler işaretlenemeyecek.")
 
 
     await update.message.reply_text(f"Talep edilen {miktar} adet data çekiliyor ve Excel dosyası oluşturuluyor...")
@@ -263,7 +265,7 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
             veri_sayisi_toplam += 1
 
         if veri_sayisi_toplam == 0:
-            await update.message.reply_text("Üzgünüm, Excel dosyasında gönderilebilecek data kalmadı.")
+            await update.message.reply_text("Üzgünüm, Excel dosyasında gönderilebilecek işaretlenmemiş veri kalmadı.")
             return
 
         # 4. Geçici Dosyayı Kaydetme
@@ -274,7 +276,7 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
             await context.bot.send_document(
                 chat_id=HEDEF_GRUP_ID,
                 document=f,
-                caption=f"✅ {veri_sayisi_toplam} adet data gönderildi.\n"
+                caption=f"✅ **{veri_sayisi_toplam}** adet yeni data paketi gönderildi.\n"
                         f"Dosya Adı: `{TEMP_DOSYA_ADI}`"
             )
 
@@ -282,9 +284,9 @@ async def ver_komutu_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE
         if r is not None:
             mevcut_kullanilanlar.update(yeni_kullanilacak_satir_numaralari)
             kullanilan_satirlari_kaydet(mevcut_kullanilanlar)
-            final_mesaj = f"{veri_sayisi_toplam} adet data Excel dosyası olarak gönderildi ve sistemimizden silindi."
+            final_mesaj = f"İşlem Tamamlandı! **{veri_sayisi_toplam}** adet data Excel dosyası olarak gönderildi ve **kalıcı olarak işaretlendi**."
         else:
-            final_mesaj = f"{veri_sayisi_toplam} adet data Excel dosyası olarak gönderildi. ⚠️ Ancak Redis bağlantı hatası nedeniyle işaretlenemedi."
+            final_mesaj = f"İşlem Tamamlandı! **{veri_sayisi_toplam}** adet data Excel dosyası olarak gönderildi. ⚠️ Ancak **Redis bağlantı hatası nedeniyle işaretlenemedi**."
         
         await update.message.reply_text(final_mesaj)
 
